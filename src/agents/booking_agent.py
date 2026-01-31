@@ -3,6 +3,9 @@ from datetime import datetime, timedelta
 from src.config.models import RestaurantBookingState, CostOptimizedModelRouter
 from src.tools.user_tools import search_user_tool, register_user_tool
 from src.tools.booking_tools import calculate_token_amount_tool, book_table_tool, process_payment_tool
+from src.utils.logger import logger
+from src.utils.llm_helpers import extract_booking_details
+import re
 
 
 def validate_phone(phone: str) -> tuple[bool, str]:
@@ -42,128 +45,32 @@ def validate_guests(num_guests: int) -> tuple[bool, str, bool]:
 
 
 def booking_validation_node(state: RestaurantBookingState) -> dict:
-    """Gather booking information and validate - uses Claude Sonnet for accuracy."""
+    """Gather booking information and validate - uses LLM for extraction."""
     booking_details = state.get("booking_details", {})
     validation_errors = []
     missing_info = []
     requires_hitl = False
     hitl_reason = ""
     model = CostOptimizedModelRouter.select_model("booking_validation")
-    prompt = state.get("prompt", "").lower()
+    prompt = state.get("prompt", "")
     conversation_history = state.get("messages", [])
     
-    # Extract restaurant context from conversation history using LLM
+    logger.info(f"🔍 booking_validation_node: prompt={prompt[:50]}, history_len={len(conversation_history)}")
+    
+    # Get restaurants from state
     restaurants = state.get("restaurant_results", [])
+    logger.info(f"🔍 restaurants from state: {len(restaurants)}")
     
-    # If no restaurants in state, use LLM to extract from conversation
-    if not restaurants and conversation_history:
-        import json
-        import boto3
+    # Extract booking details using LLM if not already present
+    if not booking_details or len(booking_details) < 3:
+        extracted = extract_booking_details(prompt, conversation_history, model)
         
-        # Build conversation context
-        conv_text = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in conversation_history[-3:] if isinstance(msg, dict)])
+        # Merge with existing booking_details
+        booking_details = {**booking_details, **extracted}
         
-        extraction_prompt = f"""Extract restaurant information from this conversation and return ONLY a JSON array.
-
-Conversation:
-{conv_text}
-
-Return format (JSON array only, no other text):
-[{{"name": "Restaurant Name", "rating": "4.5", "priceRange": "$$", "address": "123 Main St", "city": "City Name", "restaurantId": "rest_001"}}]
-
-If no restaurants found, return: []"""
-        
-        try:
-            bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
-            response = bedrock.invoke_model(
-                modelId='amazon.nova-lite-v1:0',
-                body=json.dumps({
-                    "messages": [{"role": "user", "content": extraction_prompt}],
-                    "inferenceConfig": {"temperature": 0.1, "maxTokens": 500}
-                })
-            )
-            result = json.loads(response['body'].read())
-            extracted_text = result.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '[]')
-            
-            print(f"🔍 LLM Extraction Result: {extracted_text}")
-            
-            # Parse JSON from response
-            restaurants = json.loads(extracted_text.strip())
-            if not isinstance(restaurants, list):
-                restaurants = []
-            
-            print(f"✅ Extracted {len(restaurants)} restaurants from conversation")
-        except Exception as e:
-            print(f"❌ LLM extraction failed: {e}")
-            restaurants = []
-    
-    # Extract booking details from prompt
-    if not booking_details:
-        import re
-        from datetime import datetime, timedelta
-        
-        # Extract restaurant name from conversation or prompt
-        restaurant_name = ""
-        
-        # Try to find restaurant in extracted data
-        if restaurants:
-            restaurant_name = restaurants[0].get("name", "")
-        
-        # Extract guest count
-        guests_match = re.search(r'(\d+)\s+(?:people|guests|persons)', prompt)
-        if not guests_match:
-            # Check for "alone", "myself", "solo"
-            if any(word in prompt for word in ['alone', 'myself', 'solo', 'just me']):
-                num_guests = 1
-            else:
-                num_guests = None
-        else:
-            num_guests = int(guests_match.group(1))
-        
-        # Extract date
-        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', prompt)
-        if date_match:
-            booking_date = date_match.group(1)
-        elif 'tomorrow' in prompt:
-            booking_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif 'today' in prompt:
-            booking_date = datetime.now().strftime("%Y-%m-%d")
-        else:
-            booking_date = None
-        
-        # Extract time
-        time_match = re.search(r'(\d{1,2}:\d{2})', prompt)
-        if time_match:
-            booking_time = time_match.group(1)
-        elif any(word in prompt for word in ['lunch', 'afternoon']):
-            booking_time = "13:00"
-        elif any(word in prompt for word in ['dinner', 'evening']):
-            booking_time = "19:00"
-        else:
-            booking_time = None
-        
-        # Extract name
-        name_match = re.search(r'(?:name is|i am|i\'m)\s+([a-z]+\s+[a-z]+)', prompt)
-        user_name = name_match.group(1).title() if name_match else None
-        
-        # Extract email
-        email_match = re.search(r'([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})', prompt)
-        user_email = email_match.group(1) if email_match else ""
-        
-        # Extract phone
-        phone_match = re.search(r'(?:phone|mobile|number)\s+([\d-]+)', prompt)
-        user_mobile = phone_match.group(1) if phone_match else None
-        
-        booking_details = {
-            "date": booking_date,
-            "time": booking_time,
-            "meal_type": "Dinner",
-            "no_of_guests": num_guests,
-            "user_mobile": user_mobile,
-            "user_name": user_name,
-            "user_email": user_email,
-            "restaurant_name": restaurant_name
-        }
+        # If restaurant name not extracted but we have restaurants in state, use first one
+        if not booking_details.get("restaurant_name") and restaurants:
+            booking_details["restaurant_name"] = restaurants[0].get("name", "")
     
     # Check for missing required information
     if not booking_details.get("restaurant_name"):
@@ -194,7 +101,7 @@ If no restaurants found, return: []"""
             )
         }
     
-    # Validate phone
+    # Validate phone (only check digit count, not pattern)
     phone_valid, phone_error = validate_phone(booking_details.get("user_mobile", ""))
     if not phone_valid:
         validation_errors.append(phone_error)
@@ -314,7 +221,7 @@ def booking_execution_node(state: RestaurantBookingState) -> dict:
         selected_restaurant = restaurants[0]
     
     if not selected_restaurant:
-        print(f"❌ DEBUG: No restaurant found. restaurant_name={restaurant_name}, restaurants={len(restaurants)}, booking_details={booking_details}")
+        logger.error(f"❌ DEBUG: No restaurant found. restaurant_name={restaurant_name}, restaurants={len(restaurants)}, booking_details={booking_details}")
         return {"final_response": f"❌ No restaurant selected for booking. Please start over by searching for restaurants first."}
     
     try:
@@ -362,7 +269,7 @@ def booking_execution_node(state: RestaurantBookingState) -> dict:
             payment_parsed, error = process_payment_tool(payment_args, correlation_id)
             
             if error:
-                print(f"⚠️ Payment blocked: {error}. Cancelling booking.")
+                logger.warning(f"⚠️ Payment blocked: {error}. Cancelling booking.")
                 return {"final_response": f"❌ Payment blocked: {error}. Booking cancelled."}
             
             payment_status = payment_parsed.get("paymentStatus") or payment_parsed.get("status") or "unknown"
@@ -389,7 +296,7 @@ def booking_execution_node(state: RestaurantBookingState) -> dict:
             }
         
         except Exception as payment_error:
-            print(f"Payment failed, compensating: {payment_error}")
+            logger.error(f"Payment failed, compensating: {payment_error}")
             return {"final_response": f"❌ Payment failed. Booking cancelled."}
     
     except Exception as e:

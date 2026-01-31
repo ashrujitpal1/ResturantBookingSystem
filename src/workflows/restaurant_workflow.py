@@ -84,7 +84,8 @@ langgraph_workflow = create_restaurant_booking_workflow()
 @app.entrypoint
 def invoke(payload):
     """AgentCore Runtime entrypoint with memory support."""
-    print(f"📥 Received payload: {payload}")
+    from src.utils.logger import logger
+    logger.info(f"📥 Received payload: {payload}")
     
     prompt = payload.get("prompt", "")
     user_id = payload.get("user_id", "default_user")
@@ -146,12 +147,13 @@ def invoke(payload):
         return final_state.get("final_response", "No response generated.")
     
     except Exception as e:
-        print(f"❌ Workflow error: {str(e)}")
+        logger.error(f"❌ Workflow error: {str(e)}")
         return f"Error: {str(e)}"
 
 
 print("✅ Restaurant Booking System initialized (Modular Architecture)")
 
 if __name__ == "__main__":
-    print("🚀 Starting Restaurant Booking Agent...")
+    from src.utils.logger import logger
+    logger.info("🚀 Starting Restaurant Booking Agent...")
     app.run()

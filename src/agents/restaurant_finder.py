@@ -2,10 +2,11 @@
 from src.config.models import RestaurantBookingState, CostOptimizedModelRouter
 from src.tools.restaurant_tools import fetch_restaurants_tool
 from src.utils.circuit_breaker import validate_user_input, wrap_user_input
+from src.utils.llm_helpers import classify_intent, extract_search_params
 
 
 def entry_router_node(state: RestaurantBookingState) -> dict:
-    """Route based on intent - uses Nova Micro for cost efficiency."""
+    """Route based on intent - uses LLM for intelligent classification."""
     user_message = state.get("prompt", "")
     conversation_history = state.get("messages", [])
     model = CostOptimizedModelRouter.select_model("intent_classification")
@@ -21,54 +22,64 @@ def entry_router_node(state: RestaurantBookingState) -> dict:
         }
     
     wrapped_prompt = wrap_user_input(user_message)
-    prompt = wrapped_prompt.lower()
     
-    # Check conversation history for context
-    has_restaurant_context = any("restaurant" in str(msg).lower() and "found" in str(msg).lower() 
-                                  for msg in conversation_history[-3:] if msg)
+    # Use LLM for intent classification
+    intent_result = classify_intent(user_message, conversation_history, model)
+    intent = intent_result.get("intent", "search")
     
-    # If user says "yes" and previous message mentioned restaurants, go to booking
-    if has_restaurant_context and any(kw in prompt for kw in ["yes", "sure", "ok", "book", "reserve"]):
-        return {"intent": "booking", "booking_intent": True, "next": "booking_validation", "model_used": model, "prompt": wrapped_prompt}
+    # Route based on LLM-classified intent
+    if intent == "invalid":
+        return {
+            "intent": "invalid_input",
+            "final_response": "I detected potentially invalid input. Please rephrase your request.",
+            "next": "END",
+            "model_used": model
+        }
     
-    if any(kw in prompt for kw in ["history", "previous", "show me", "past"]):
-        return {"intent": "history", "next": "retrieve_memory", "model_used": model, "prompt": wrapped_prompt}
+    if intent == "booking":
+        # Preserve restaurant_results from state for booking context
+        return {
+            "intent": "booking",
+            "booking_intent": True,
+            "next": "booking_validation",
+            "model_used": model,
+            "prompt": wrapped_prompt,
+            "restaurant_results": state.get("restaurant_results", [])
+        }
     
-    if any(kw in prompt for kw in ["book", "reserve", "table", "reservation"]):
-        return {"intent": "booking", "booking_intent": True, "next": "restaurant_finder", "model_used": model, "prompt": wrapped_prompt}
+    if intent == "history":
+        return {
+            "intent": "history",
+            "next": "retrieve_memory",
+            "model_used": model,
+            "prompt": wrapped_prompt
+        }
     
-    return {"intent": "search", "booking_intent": False, "next": "restaurant_finder", "model_used": model, "prompt": wrapped_prompt}
+    # Default to search
+    return {
+        "intent": "search",
+        "booking_intent": False,
+        "next": "restaurant_finder",
+        "model_used": model,
+        "prompt": wrapped_prompt
+    }
 
 
 def restaurant_finder_node(state: RestaurantBookingState) -> dict:
-    """Restaurant search - uses Nova Lite for cost optimization."""
+    """Restaurant search - uses LLM for parameter extraction."""
     correlation_id = state.get("correlation_id", "")
     prompt = state.get("prompt", "")
     search_params = state.get("search_params", {})
     model = CostOptimizedModelRouter.select_model("restaurant_search")
     
-    # Extract city and cuisine from prompt if not in search_params
+    # Extract city and cuisine using LLM if not in search_params
     city = search_params.get("city", "")
     cuisine = search_params.get("cuisine", "")
     
     if not city or not cuisine:
-        prompt_lower = prompt.lower()
-        
-        # Extract city
-        cities = ["new york", "boston", "chicago", "seattle", "san francisco", 
-                  "los angeles", "miami", "austin", "denver", "atlanta"]
-        for c in cities:
-            if c in prompt_lower:
-                city = c.title()
-                break
-        
-        # Extract cuisine
-        cuisines = ["italian", "chinese", "japanese", "mexican", "indian", 
-                    "french", "thai", "american", "greek", "spanish"]
-        for cu in cuisines:
-            if cu in prompt_lower:
-                cuisine = cu.title()
-                break
+        extracted = extract_search_params(prompt, model)
+        city = extracted.get("city", "") or city
+        cuisine = extracted.get("cuisine", "") or cuisine
     
     try:
         parsed = fetch_restaurants_tool(

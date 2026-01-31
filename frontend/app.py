@@ -59,11 +59,16 @@ if prompt := st.chat_input("Ask me anything about restaurants..."):
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                # Build conversation history from messages
+                # Build conversation history from messages (exclude current prompt)
                 conversation_history = []
-                for msg in st.session_state.messages:
+                for msg in st.session_state.messages[:-1]:  # Exclude the current user message
                     role = "user" if msg["role"] == "user" else "assistant"
                     conversation_history.append({"role": role, "content": msg["content"]})
+                
+                # Debug: Show what we're sending
+                st.write(f"DEBUG: Sending {len(conversation_history)} history messages")
+                if conversation_history:
+                    st.write(f"DEBUG: Last history message: {conversation_history[-1]['content'][:100]}...")
                 
                 # Build payload with full conversation context
                 payload = {
