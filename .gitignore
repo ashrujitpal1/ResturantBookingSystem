@@ -1,0 +1,39 @@
+# Secrets and credentials
+agentcore-gateway-config.json
+.bedrock_agentcore.yaml
+*.pem
+*.key
+
+# AWS
+.aws/
+.aws-sam/
+lambda-arns.json
+gateway-targets.json
+
+# Environment
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+streamlit.log
+nohup.out
+
+# OS
+.DS_Store
+Thumbs.db

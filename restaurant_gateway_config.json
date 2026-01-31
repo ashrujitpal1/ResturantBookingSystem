@@ -1,0 +1,41 @@
+{
+  "COGNITO_AUTH_CONFIG": {
+    "customJWTAuthorizer": {
+      "allowedClients": [
+        "7ucijdnm2vev1madqo77k0p093"
+      ],
+      "discoveryUrl": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_7BSeP8ZuP/.well-known/openid-configuration"
+    }
+  },
+  "COGNITO_INFO": {
+    "client_id": "7ucijdnm2vev1madqo77k0p093",
+    "client_secret": "1jslosn7mftlk299fagqt5kl4lfm9ao0vlbe0fh560ft3dj1p9uh",
+    "user_pool_id": "us-east-1_7BSeP8ZuP",
+    "token_endpoint": "https://agentcore-b67edaea.auth.us-east-1.amazoncognito.com/oauth2/token",
+    "scope": "RestaurantBookingAuth/invoke",
+    "domain_prefix": "agentcore-b67edaea"
+  },
+  "REGION": "us-east-1",
+  "GATEWAY_ID": "restaurantappgatewayuop91kvy-xg33kutnwg",
+  "GATEWAY_URL": "https://restaurantappgatewayuop91kvy-xg33kutnwg.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+  "AVAILABLE_TOOLS": [
+    "fetchRestaurantDetails",
+    "fetchRestaurantDetailsById",
+    "tokenAmountCalculation",
+    "registerUser",
+    "searchUserDetails",
+    "bookATable",
+    "paymentAPI",
+    "bookRestaurant"
+  ],
+  "TARGET_IDS": {
+    "fetchRestaurantDetails": "6RZIKORWWH",
+    "fetchRestaurantDetailsById": "6SBSXVQ4Y3",
+    "tokenAmountCalculation": "NZKQDOHNLC",
+    "registerUser": "YW9U5VFFYQ",
+    "searchUserDetails": "KOBWRFZSFB",
+    "bookATable": "UZNELIFNQY",
+    "paymentAPI": "5OAWAZMOGK",
+    "bookRestaurant": "YDZH9BSPKX"
+  }
+}

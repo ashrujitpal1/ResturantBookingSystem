@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Restaurant Booking System Lambda Functions (Direct MCP Integration)
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.9
+    Environment:
+      Variables:
+        RESTAURANTS_TABLE: !Ref RestaurantsTableName
+        USERS_TABLE: !Ref UsersTableName
+        BOOKINGS_TABLE: !Ref BookingsTableName
+        PAYMENTS_TABLE: !Ref PaymentsTableName
+        IDEMPOTENCY_TABLE: !Ref IdempotencyTableName
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  
+  RestaurantsTableName:
+    Type: String
+    Default: Restaurants
+    Description: Name of existing Restaurants DynamoDB table
+  
+  UsersTableName:
+    Type: String
+    Default: Users
+    Description: Name of existing Users DynamoDB table
+  
+  BookingsTableName:
+    Type: String
+    Default: Bookings
+    Description: Name of existing Bookings DynamoDB table
+  
+  PaymentsTableName:
+    Type: String
+    Default: Payments
+    Description: Name of existing Payments DynamoDB table
+  
+  IdempotencyTableName:
+    Type: String
+    Default: IdempotencyCache
+    Description: Table for idempotency tracking
+
+Resources:
+  # Lambda Functions for Direct MCP Integration
+  FetchRestaurantDetailsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "fetchRestaurantDetails-${Environment}"
+      CodeUri: src/lambda/
+      Handler: fetch_restaurant_details.lambda_handler
+      Timeout: 5
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RestaurantsTableName
+
+  FetchRestaurantDetailsByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "fetchRestaurantDetailsById-${Environment}"
+      CodeUri: src/lambda/
+      Handler: fetch_restaurant_details_by_id.lambda_handler
+      Timeout: 3
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RestaurantsTableName
+
+  BookRestaurantFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "bookRestaurant-${Environment}"
+      CodeUri: src/lambda/
+      Handler: book_restaurant.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookingsTableName
+
+  BookATableFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "bookATable-${Environment}"
+      CodeUri: src/lambda/
+      Handler: book_a_table.lambda_handler
+      Timeout: 10
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BookingsTableName
+        - DynamoDBReadPolicy:
+            TableName: !Ref RestaurantsTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTableName
+
+  SearchUserDetailsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "searchUserDetails-${Environment}"
+      CodeUri: src/lambda/
+      Handler: search_user_details.lambda_handler
+      Timeout: 3
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsersTableName
+
+  RegisterUserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "registerUser-${Environment}"
+      CodeUri: src/lambda/
+      Handler: register_user.lambda_handler
+      Timeout: 5
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTableName
+
+  TokenAmountCalculationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "tokenAmountCalculation-${Environment}"
+      CodeUri: src/lambda/
+      Handler: token_amount_calculation.lambda_handler
+      Timeout: 2
+
+  PaymentAPIFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "paymentAPI-${Environment}"
+      CodeUri: src/lambda/
+      Handler: payment_api.lambda_handler
+      Timeout: 15
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PaymentsTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTableName
+
+Outputs:
+  FetchRestaurantDetailsFunctionArn:
+    Description: "Fetch Restaurant Details Lambda Function ARN"
+    Value: !GetAtt FetchRestaurantDetailsFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FetchRestaurantDetailsFunction"
+
+  FetchRestaurantDetailsByIdFunctionArn:
+    Description: "Fetch Restaurant Details By ID Lambda Function ARN"
+    Value: !GetAtt FetchRestaurantDetailsByIdFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FetchRestaurantDetailsByIdFunction"
+
+  BookRestaurantFunctionArn:
+    Description: "Book Restaurant Lambda Function ARN"
+    Value: !GetAtt BookRestaurantFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BookRestaurantFunction"
+
+  BookATableFunctionArn:
+    Description: "Book A Table Lambda Function ARN"
+    Value: !GetAtt BookATableFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BookATableFunction"
+
+  SearchUserDetailsFunctionArn:
+    Description: "Search User Details Lambda Function ARN"
+    Value: !GetAtt SearchUserDetailsFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-SearchUserDetailsFunction"
+
+  RegisterUserFunctionArn:
+    Description: "Register User Lambda Function ARN"
+    Value: !GetAtt RegisterUserFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RegisterUserFunction"
+
+  TokenAmountCalculationFunctionArn:
+    Description: "Token Amount Calculation Lambda Function ARN"
+    Value: !GetAtt TokenAmountCalculationFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-TokenAmountCalculationFunction"
+
+  PaymentAPIFunctionArn:
+    Description: "Payment API Lambda Function ARN"
+    Value: !GetAtt PaymentAPIFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-PaymentAPIFunction"

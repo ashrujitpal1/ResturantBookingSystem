@@ -1,0 +1,206 @@
+[
+  {
+    "name": "fetchRestaurantDetails",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:fetchRestaurantDetails-dev",
+    "description": "Search restaurants by city, cuisine, price range, or rating",
+    "parameters": {
+      "city": {
+        "type": "string",
+        "description": "City name",
+        "required": false
+      },
+      "cuisine": {
+        "type": "string",
+        "description": "Cuisine type",
+        "required": false
+      },
+      "priceRange": {
+        "type": "string",
+        "description": "Price range: $, $$, $$$, $$$$",
+        "required": false
+      },
+      "minRating": {
+        "type": "number",
+        "description": "Minimum rating (0-5)",
+        "required": false
+      }
+    }
+  },
+  {
+    "name": "fetchRestaurantDetailsById",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:fetchRestaurantDetailsById-dev",
+    "description": "Get detailed information about a specific restaurant by ID",
+    "parameters": {
+      "restaurantId": {
+        "type": "string",
+        "description": "Restaurant ID",
+        "required": true
+      }
+    }
+  },
+  {
+    "name": "searchUserDetails",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:searchUserDetails-dev",
+    "description": "Find user by username or mobile number",
+    "parameters": {
+      "username": {
+        "type": "string",
+        "description": "Username",
+        "required": false
+      },
+      "userMobileNo": {
+        "type": "string",
+        "description": "Mobile number",
+        "required": false
+      }
+    }
+  },
+  {
+    "name": "registerUser",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:registerUser-dev",
+    "description": "Register a new user with preferences",
+    "parameters": {
+      "username": {
+        "type": "string",
+        "description": "User full name",
+        "required": true
+      },
+      "mobileNo": {
+        "type": "string",
+        "description": "Mobile number with country code",
+        "required": true
+      },
+      "userCity": {
+        "type": "string",
+        "description": "User city",
+        "required": true
+      },
+      "userPreference": {
+        "type": "object",
+        "description": "User preferences",
+        "required": false
+      },
+      "requestId": {
+        "type": "string",
+        "description": "Request ID for idempotency",
+        "required": false
+      }
+    }
+  },
+  {
+    "name": "tokenAmountCalculation",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:tokenAmountCalculation-dev",
+    "description": "Calculate token amount for booking",
+    "parameters": {
+      "noOfGuests": {
+        "type": "integer",
+        "description": "Number of guests (1-20)",
+        "required": true
+      },
+      "mealType": {
+        "type": "string",
+        "description": "Meal type: Breakfast, Lunch, Dinner",
+        "required": false
+      },
+      "restaurantTier": {
+        "type": "string",
+        "description": "Restaurant tier",
+        "required": false
+      }
+    }
+  },
+  {
+    "name": "bookATable",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:bookATable-dev",
+    "description": "Book a table at restaurant. REQUIRES requestId for idempotency",
+    "parameters": {
+      "restaurantId": {
+        "type": "string",
+        "description": "Restaurant ID",
+        "required": true
+      },
+      "userName": {
+        "type": "string",
+        "description": "User full name",
+        "required": true
+      },
+      "userMobileNo": {
+        "type": "string",
+        "description": "User mobile number",
+        "required": true
+      },
+      "date": {
+        "type": "string",
+        "description": "Booking date (YYYY-MM-DD)",
+        "required": true
+      },
+      "time": {
+        "type": "string",
+        "description": "Booking time (HH:MM)",
+        "required": true
+      },
+      "type": {
+        "type": "string",
+        "description": "Meal type",
+        "required": true
+      },
+      "cityName": {
+        "type": "string",
+        "description": "City name",
+        "required": true
+      },
+      "noOfGuests": {
+        "type": "integer",
+        "description": "Number of guests",
+        "required": true
+      },
+      "tokenAmount": {
+        "type": "number",
+        "description": "Token amount",
+        "required": true
+      },
+      "requestId": {
+        "type": "string",
+        "description": "REQUIRED: Request ID for idempotency",
+        "required": true
+      }
+    }
+  },
+  {
+    "name": "paymentAPI",
+    "arn": "arn:aws:lambda:us-east-1:696072349808:function:paymentAPI-dev",
+    "description": "Process payment for booking. REQUIRES requestId for idempotency",
+    "parameters": {
+      "userId": {
+        "type": "string",
+        "description": "User ID",
+        "required": true
+      },
+      "restaurantId": {
+        "type": "string",
+        "description": "Restaurant ID",
+        "required": true
+      },
+      "bookingId": {
+        "type": "string",
+        "description": "Booking ID",
+        "required": false
+      },
+      "tokenAmount": {
+        "type": "number",
+        "description": "Payment amount",
+        "required": true
+      },
+      "paymentMethod": {
+        "type": "string",
+        "description": "Payment method",
+        "required": false
+      },
+      "requestId": {
+        "type": "string",
+        "description": "REQUIRED: Request ID for idempotency",
+        "required": true
+      }
+    }
+  }
+]

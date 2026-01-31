@@ -1,0 +1,25 @@
+{
+  "gateway_id": "YOUR_GATEWAY_ID",
+  "gateway_url": "https://YOUR_GATEWAY.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp",
+  "authorizer_config": {
+    "customJWTAuthorizer": {
+      "allowedClients": [
+        "YOUR_CLIENT_ID"
+      ],
+      "discoveryUrl": "https://cognito-idp.REGION.amazonaws.com/YOUR_USER_POOL/.well-known/openid-configuration"
+    }
+  },
+  "client_info": {
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "user_pool_id": "YOUR_USER_POOL_ID",
+    "token_endpoint": "https://YOUR_DOMAIN.auth.REGION.amazoncognito.com/oauth2/token",
+    "scope": "RestaurantBookingAuth/invoke",
+    "domain_prefix": "YOUR_DOMAIN_PREFIX"
+  },
+  "access_token": "YOUR_ACCESS_TOKEN",
+  "account_id": "YOUR_AWS_ACCOUNT_ID",
+  "region": "us-east-1",
+  "memory_id": "YOUR_MEMORY_ID",
+  "memory_role_arn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/YOUR_MEMORY_ROLE"
+}
