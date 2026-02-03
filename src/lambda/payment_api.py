@@ -78,7 +78,7 @@ def lambda_handler(event, context):
         result = {
             'paymentId': payment_id,
             'transactionId': transaction_result,
-            'amount': token_amount,
+            'amount': float(token_amount),  # Convert Decimal to float for JSON
             'paymentStatus': 'completed',
             'paymentDate': datetime.utcnow().isoformat()
         }

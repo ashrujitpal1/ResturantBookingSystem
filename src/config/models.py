@@ -28,6 +28,7 @@ class RestaurantBookingState(TypedDict):
     requires_hitl: bool
     hitl_reason: str
     validation_errors: list
+    needs_more_info: bool
 
 
 class CostOptimizedModelRouter:
@@ -35,8 +36,8 @@ class CostOptimizedModelRouter:
     MODEL_COSTS = {
         "amazon.nova-micro-v1:0": 0.00015,
         "amazon.nova-lite-v1:0": 0.0006,
-        "anthropic.claude-3-haiku": 0.00025,
-        "anthropic.claude-3-sonnet": 0.003
+        "anthropic.claude-3-haiku-20240307-v1:0": 0.00025,
+        "anthropic.claude-3-sonnet-20240229-v1:0": 0.003
     }
     
     @staticmethod
@@ -44,8 +45,8 @@ class CostOptimizedModelRouter:
         routing = {
             "intent_classification": "amazon.nova-micro-v1:0",
             "restaurant_search": "amazon.nova-lite-v1:0",
-            "booking_validation": "anthropic.claude-3-sonnet",
-            "payment_processing": "anthropic.claude-3-sonnet"
+            "booking_validation": "amazon.nova-lite-v1:0",
+            "payment_processing": "amazon.nova-lite-v1:0"
         }
         return routing.get(task_type, "amazon.nova-lite-v1:0")
     
@@ -58,7 +59,7 @@ class CostOptimizedModelRouter:
 # Configuration
 REGION = os.getenv("AWS_REGION", "us-east-1")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "https://restaurantappgatewaymi99khe1-tmnyzeshe6.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp")
-MEMORY_ID = os.getenv("MEMORY_ID", "restaurant_booking_memory-aOsBjaAma6")
+MEMORY_ID = os.getenv("MEMORY_ID", "restaurant_booking_memory-mQq0w43dkO")
 PROMPT_VERSION = os.getenv("PROMPT_VERSION", "1.0.0")
 PROMPT_BUCKET = os.getenv("PROMPT_BUCKET", "restaurant-booking-prompts")
 

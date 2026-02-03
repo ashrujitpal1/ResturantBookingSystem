@@ -1,0 +1,36 @@
+{
+  "discovery": null,
+  "restaurant_tools": [
+    {
+      "tool": "fetchRestaurantDetails",
+      "status": "failed",
+      "error": "<UnknownOperationException/>\n"
+    },
+    {
+      "tool": "fetchRestaurantDetailsById",
+      "status": "success",
+      "data": {
+        "Output": {
+          "__type": "com.amazon.coral.service#UnknownOperationException"
+        },
+        "Version": "1.0"
+      }
+    },
+    {
+      "tool": "tokenAmountCalculation",
+      "status": "success",
+      "data": {
+        "Output": {
+          "__type": "com.amazon.coral.service#UnknownOperationException"
+        },
+        "Version": "1.0"
+      }
+    }
+  ],
+  "booking_tools": null,
+  "summary": {
+    "total_tools_discovered": 0,
+    "restaurant_tools_tested": 3,
+    "booking_tools_success": false
+  }
+}

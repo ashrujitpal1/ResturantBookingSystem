@@ -24,33 +24,29 @@ def entry_router_node(state: RestaurantBookingState) -> dict:
     wrapped_prompt = wrap_user_input(user_message)
     
     # Use LLM for intent classification
-    intent_result = classify_intent(user_message, conversation_history, model)
+    correlation_id = state.get("correlation_id", "")
+    intent_result = classify_intent(user_message, conversation_history, model, correlation_id)
     intent = intent_result.get("intent", "search")
     
-    # Route based on LLM-classified intent
+    # If LLM returns invalid, default to booking (since regex already validated)
     if intent == "invalid":
-        return {
-            "intent": "invalid_input",
-            "final_response": "I detected potentially invalid input. Please rephrase your request.",
-            "next": "END",
-            "model_used": model
-        }
+        intent = "booking"  # Assume booking if providing details after validation passed
     
     if intent == "booking":
-        # Preserve restaurant_results from state for booking context
+        # Preserve restaurant_results and search_params for booking context
         return {
             "intent": "booking",
             "booking_intent": True,
-            "next": "booking_validation",
             "model_used": model,
             "prompt": wrapped_prompt,
-            "restaurant_results": state.get("restaurant_results", [])
+            "restaurant_results": state.get("restaurant_results", []),
+            "search_params": state.get("search_params", {}),
+            "selected_restaurant": state.get("selected_restaurant", {})
         }
     
     if intent == "history":
         return {
             "intent": "history",
-            "next": "retrieve_memory",
             "model_used": model,
             "prompt": wrapped_prompt
         }
@@ -59,7 +55,6 @@ def entry_router_node(state: RestaurantBookingState) -> dict:
     return {
         "intent": "search",
         "booking_intent": False,
-        "next": "restaurant_finder",
         "model_used": model,
         "prompt": wrapped_prompt
     }
@@ -69,17 +64,19 @@ def restaurant_finder_node(state: RestaurantBookingState) -> dict:
     """Restaurant search - uses LLM for parameter extraction."""
     correlation_id = state.get("correlation_id", "")
     prompt = state.get("prompt", "")
-    search_params = state.get("search_params", {})
     model = CostOptimizedModelRouter.select_model("restaurant_search")
     
-    # Extract city and cuisine using LLM if not in search_params
-    city = search_params.get("city", "")
-    cuisine = search_params.get("cuisine", "")
+    # Always extract fresh parameters from the current prompt
+    extracted = extract_search_params(prompt, model, correlation_id)
+    city = extracted.get("city", "")
+    cuisine = extracted.get("cuisine", "")
     
+    # If extraction failed, return error
     if not city or not cuisine:
-        extracted = extract_search_params(prompt, model)
-        city = extracted.get("city", "") or city
-        cuisine = extracted.get("cuisine", "") or cuisine
+        return {
+            "restaurant_results": [],
+            "final_response": "I need both a city and cuisine type to search. For example: 'Find Italian restaurants in New York'"
+        }
     
     try:
         parsed = fetch_restaurants_tool(

@@ -2,7 +2,10 @@
 import time
 import random
 import requests
+import boto3
+import json
 from abc import ABC, abstractmethod
+from typing import Dict, Any
 from src.config.models import GATEWAY_URL, COGNITO_INFO, REGION
 
 try:
@@ -31,6 +34,34 @@ class LLMProvider(ABC):
     @abstractmethod
     def invoke(self, tool_name: str, arguments: dict) -> dict:
         pass
+
+
+class BedrockConverseProvider(LLMProvider):
+    """Bedrock Converse API provider for auxiliary LLM calls."""
+    def __init__(self, region: str):
+        self.bedrock = boto3.client('bedrock-runtime', region_name=region)
+    
+    def invoke(self, model_id: str, messages: list, inference_config: dict, request_id: str = None) -> Dict[str, Any]:
+        """Invoke Bedrock Converse API with idempotency."""
+        try:
+            params = {
+                "modelId": model_id,
+                "messages": messages,
+                "inferenceConfig": inference_config
+            }
+            if request_id:
+                params["requestMetadata"] = {"requestId": request_id}
+            
+            response = self.bedrock.converse(**params)
+            result_text = response['output']['message']['content'][0]['text'].strip()
+            
+            # Remove markdown code blocks if present
+            if result_text.startswith('```'):
+                result_text = result_text.split('\n', 1)[1].rsplit('\n```', 1)[0]
+            
+            return json.loads(result_text)
+        except Exception as e:
+            raise Exception(f"Bedrock Converse failed: {e}")
 
 
 class MCPToolProvider(LLMProvider):
@@ -71,9 +102,9 @@ class FallbackProvider(LLMProvider):
         self.failure_count = 0
         self.failure_threshold = 3
     
-    def invoke(self, tool_name: str, arguments: dict) -> dict:
+    def invoke(self, *args, **kwargs) -> dict:
         try:
-            result = self.primary.invoke(tool_name, arguments)
+            result = self.primary.invoke(*args, **kwargs)
             self.failure_count = 0
             return result
         except Exception as e:
@@ -81,11 +112,12 @@ class FallbackProvider(LLMProvider):
             print(f"⚠️ Primary provider failed ({self.failure_count}/{self.failure_threshold}): {e}")
             if self.failure_count >= self.failure_threshold:
                 print("🔄 Switching to secondary provider")
-                return self.secondary.invoke(tool_name, arguments)
+                return self.secondary.invoke(*args, **kwargs)
             raise
 
 
 _llm_provider = None
+_bedrock_provider = None
 
 def get_llm_provider() -> LLMProvider:
     """Factory function to create LLM provider with fallback."""
@@ -95,3 +127,12 @@ def get_llm_provider() -> LLMProvider:
         secondary = MCPToolProvider(gateway_url=GATEWAY_URL, cognito_info=COGNITO_INFO, region=REGION)
         _llm_provider = FallbackProvider(primary, secondary)
     return _llm_provider
+
+def get_bedrock_provider() -> BedrockConverseProvider:
+    """Factory function to create Bedrock Converse provider with circuit breaker."""
+    global _bedrock_provider
+    if _bedrock_provider is None:
+        primary = BedrockConverseProvider(region=REGION)
+        secondary = BedrockConverseProvider(region=REGION)
+        _bedrock_provider = FallbackProvider(primary, secondary)
+    return _bedrock_provider

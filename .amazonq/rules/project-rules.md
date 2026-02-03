@@ -8,11 +8,12 @@ This is a production-grade Restaurant Booking System using AWS Bedrock AgentCore
 
 ### Framework Usage
 - Use **LangGraph** for workflow orchestration, state management, and conditional routing
-- Use **Strands Agents** for agent execution, Bedrock model integration, and MCP tool calling
-- Never use one without the other - they are complementary
+- Use **Bedrock Converse API** for direct LLM calls with cost optimization
+- Use **MCP Tools** via Gateway for Lambda function invocations
+- Use **plain Python functions** as LangGraph nodes for simplicity and maintainability
 
 ### SOLID Principles (Mandatory)
-- **Single Responsibility**: Each agent handles ONE task only (Restaurant Finder = search, Booking Agent = booking/payment)
+- **Single Responsibility**: Each agent handles ONE task only (Restaurant Finder = search, Booking Agent = booking)
 - **Open/Closed**: Create base abstractions for Agent and LLMProvider classes, extend without modifying
 - **Liskov Substitution**: Use polymorphic LLMProvider (AnthropicProvider, AmazonNovaProvider) for seamless switching
 - **Interface Segregation**: Create capability-based tool interfaces
@@ -20,7 +21,7 @@ This is a production-grade Restaurant Booking System using AWS Bedrock AgentCore
 
 ### Design Patterns (Required)
 - **Handoff Pattern**: Restaurant Finder → Booking Agent with context transfer
-- **SAGA Pattern**: All booking/payment operations must be compensatable with rollback logic
+- **SAGA Pattern**: All booking operations must be compensatable with rollback logic
 - **Circuit Breaker**: Primary LLM fails → fallback to secondary (Claude → Nova)
 - **Idempotency**: ALL tool calls must include requestId for deduplication
 
@@ -47,35 +48,46 @@ class RestaurantBookingState(TypedDict):
 from langgraph.graph import StateGraph, END
 
 workflow = StateGraph(RestaurantBookingState)
-workflow.add_node("entry_router", entry_router)
+workflow.add_node("entry_router", entry_router_node)
 workflow.add_node("restaurant_finder", restaurant_finder_node)
-workflow.add_node("booking_agent", booking_agent_node)
+workflow.add_node("booking_validation", booking_validation_node)
 workflow.add_conditional_edges("entry_router", route_by_intent, {...})
 ```
 
-### Strands Agent Pattern
+### Agent Node Pattern
 ```python
-# Always inject LLM provider for polymorphism
-from strands_agents import StrandsAgent
-
+# Plain Python functions as LangGraph nodes
 def restaurant_finder_node(state: RestaurantBookingState) -> dict:
-    llm_provider = get_llm_provider_with_fallback()  # Circuit breaker
-    agent = StrandsAgent(
-        llm_provider=llm_provider,
-        tools=[fetch_restaurants_tool, fetch_by_id_tool],
-        system_prompt=load_prompt("restaurant_finder", PROMPT_VERSION),
-        temperature=0.3
+    correlation_id = state.get("correlation_id")
+    model = CostOptimizedModelRouter.select_model("restaurant_search")
+    
+    # Extract parameters using Bedrock Converse
+    extracted = extract_search_params(state["prompt"], model, correlation_id)
+    
+    # Call MCP tool
+    result = fetch_restaurants_tool(
+        city=extracted["city"],
+        cuisine=extracted["cuisine"],
+        correlation_id=correlation_id
     )
-    return agent.invoke(state)
+    
+    return {"restaurant_results": result.get("restaurants", [])}
 ```
 
-### Tool Invocation (Idempotency Required)
+### MCP Tool Invocation (Idempotency Required)
 ```python
 # ALWAYS include requestId for idempotency
-result = tool.invoke({
-    "param1": value1,
-    "requestId": f"{correlation_id}_{operation_name}_{attempt}"
-})
+def fetch_restaurants_tool(city: str, cuisine: str, correlation_id: str) -> dict:
+    provider = get_llm_provider()  # MCPToolProvider
+    result = provider.invoke(
+        "fetch-restaurant-details-target___fetchRestaurantDetails",
+        {
+            "city": city,
+            "cuisine": cuisine,
+            "requestId": f"{correlation_id}_search_1"
+        }
+    )
+    return parse_mcp_response(result)
 ```
 
 ### Error Handling (SAGA Pattern)
@@ -100,16 +112,26 @@ except Exception as e:
 ### Cost Optimization (Mandatory)
 ```python
 # Always select model based on task complexity
-MODEL_SELECTION = {
-    "intent_classification": "amazon.nova-micro-v1:0",  # Cheapest
-    "restaurant_search": "amazon.nova-lite-v1:0",
-    "booking_validation": "anthropic.claude-3-sonnet",  # High-stakes
-}
+class CostOptimizedModelRouter:
+    MODELS = {
+        "intent_classification": "amazon.nova-micro-v1:0",  # Cheapest
+        "restaurant_search": "amazon.nova-lite-v1:0",
+        "booking_validation": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    }
+    
+    @staticmethod
+    def select_model(task: str) -> str:
+        return CostOptimizedModelRouter.MODELS.get(task, "amazon.nova-lite-v1:0")
 
-# Always cache system prompts
-@lru_cache(maxsize=10)
-def load_prompt(agent_name: str, version: str) -> str:
-    return s3_client.get_object(...)["Body"].read()
+# Use Bedrock Converse for LLM calls
+def extract_search_params(prompt: str, model: str, correlation_id: str) -> dict:
+    bedrock = get_bedrock_provider()
+    return bedrock.invoke(
+        model_id=model,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inference_config={"temperature": 0.3, "maxTokens": 500},
+        request_id=f"{correlation_id}_extract_1"
+    )
 ```
 
 ### Security (Non-Negotiable)
@@ -194,28 +216,31 @@ src/
 
 ## Dependencies
 ```python
-# Core frameworks (always include)
+# Core frameworks
 langgraph>=0.2.0
-strands-agents>=1.0.0
-bedrock-agentcore>=1.0.0
+langchain-core>=0.3.0
+langchain-aws>=0.2.0
 
 # AWS integrations
 boto3>=1.34.0
 aws-xray-sdk>=2.12.0
+bedrock-agentcore
+bedrock-agentcore-starter-toolkit
 
 # Validation
 pydantic>=2.0.0
+requests>=2.31.0
 ```
 
 ## What NOT to Do
-- ❌ Don't create "super agents" that do everything
-- ❌ Don't hardcode prompts in code
-- ❌ Don't skip requestId in tool calls
-- ❌ Don't use concrete LLM implementations directly (use abstraction)
-- ❌ Don't skip error handling and compensation logic
+- ❌ Don't create "super agents" that do everything (single responsibility)
+- ❌ Don't hardcode prompts in code (use versioned prompts)
+- ❌ Don't skip requestId in MCP tool calls (idempotency)
+- ❌ Don't skip error handling and SAGA compensation logic
 - ❌ Don't forget correlation IDs in logging
 - ❌ Don't use "latest" for prompt versions in production
 - ❌ Don't skip input validation for prompt injection
+- ❌ Don't add unnecessary abstraction layers (keep it simple)
 
 ## Reference Documentation
 See `application-prod.md` for complete production patterns and examples.

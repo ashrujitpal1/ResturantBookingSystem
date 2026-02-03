@@ -1,8 +1,8 @@
 """Restaurant booking workflow orchestration using LangGraph."""
 import uuid
-import random
+import os
+from datetime import datetime
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 from src.config.models import RestaurantBookingState
@@ -14,9 +14,14 @@ from src.agents.booking_agent import (
     booking_execution_node
 )
 from src.agents.memory_agent import retrieve_memory_node, save_memory_node
+from src.utils.state_persistence import StatePersistence, extract_state_snapshot, merge_states
 
 
 app = BedrockAgentCoreApp()
+
+# AgentCore CLI sets BEDROCK_AGENTCORE_MEMORY_ID automatically
+MEMORY_ID = os.getenv("BEDROCK_AGENTCORE_MEMORY_ID")
+state_persistence = StatePersistence(use_agentcore=bool(MEMORY_ID), memory_id=MEMORY_ID)
 
 
 def create_restaurant_booking_workflow():
@@ -36,10 +41,21 @@ def create_restaurant_booking_workflow():
     # Set entry point
     workflow.set_entry_point("entry_router")
     
-    # Entry router edges
+    # Entry router edges - route based on LLM-classified intent
+    def route_after_entry(state):
+        intent = state.get("intent", "search")
+        if intent == "search":
+            return "restaurant_finder"
+        elif intent == "booking":
+            return "booking_validation"
+        elif intent == "history":
+            return "retrieve_memory"
+        else:
+            return "END"
+    
     workflow.add_conditional_edges(
         "entry_router",
-        lambda state: state.get("next", "END"),
+        route_after_entry,
         {
             "restaurant_finder": "restaurant_finder",
             "booking_validation": "booking_validation",
@@ -59,11 +75,26 @@ def create_restaurant_booking_workflow():
     )
     
     # Booking flow with validation gate
+    def route_after_validation(state):
+        # Check if more info needed (iterative collection)
+        needs_more_info = state.get("needs_more_info", False)
+        if needs_more_info:
+            return "save_memory"  # Save partial state and ask for more
+        
+        # Only proceed if validation passed AND no HITL required
+        validation_errors = state.get("validation_errors", [])
+        requires_hitl = state.get("requires_hitl", False)
+        
+        if validation_errors or requires_hitl:
+            return "END"
+        return "user_management"
+    
     workflow.add_conditional_edges(
         "booking_validation",
-        lambda state: "END" if (state.get("validation_errors") or state.get("requires_hitl")) else "user_management",
+        route_after_validation,
         {
             "user_management": "user_management",
+            "save_memory": "save_memory",
             "END": END
         }
     )
@@ -75,7 +106,7 @@ def create_restaurant_booking_workflow():
     workflow.add_edge("save_memory", END)
     workflow.add_edge("retrieve_memory", END)
     
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow.compile()  # No checkpointer - using StatePersistence instead
 
 
 langgraph_workflow = create_restaurant_booking_workflow()
@@ -83,28 +114,45 @@ langgraph_workflow = create_restaurant_booking_workflow()
 
 @app.entrypoint
 def invoke(payload):
-    """AgentCore Runtime entrypoint with memory support."""
+    """AgentCore Runtime entrypoint with state persistence."""
     from src.utils.logger import logger
+    import json
+    
+    print("="*60, flush=True)
+    print(f"🚀 AGENT INVOKED - {datetime.utcnow().isoformat()}", flush=True)
+    print(f"📥 Payload: {json.dumps(payload, indent=2)}", flush=True)
+    print(f"🔑 MEMORY_ID: {MEMORY_ID}", flush=True)
+    print(f"💾 State persistence: {'AgentCore Memory' if MEMORY_ID else 'Local'}", flush=True)
+    print("="*60, flush=True)
+    
     logger.info(f"📥 Received payload: {payload}")
+    logger.info(f"🔑 Using Memory ID: {MEMORY_ID}")
     
     prompt = payload.get("prompt", "")
-    user_id = payload.get("user_id", "default_user")
-    session_id = payload.get("session_id", f"session_{uuid.uuid4()}")
-    correlation_id = f"req_{uuid.uuid4()}"
+    session_id = payload.get("session_id", str(uuid.uuid4()))
     
-    # Get conversation history from memory
+    if len(session_id) < 33:
+        logger.warning(f"Invalid session_id length ({len(session_id)}), generating new UUID")
+        session_id = f"session_{uuid.uuid4()}"
+    
+    print(f"🎯 Session ID: {session_id}", flush=True)
+    
+    user_id = session_id
+    correlation_id = f"req_{uuid.uuid4()}"
     conversation_history = payload.get("conversation_history", [])
     
     if not prompt:
         return "No prompt provided"
     
-    # Get previous booking details from conversation context
-    previous_booking = {}
-    for msg in conversation_history:
-        if "booking_details" in str(msg):
-            # Extract any previous booking info
-            pass
+    # 1. Load previous state
+    logger.info(f"🔍 Loading previous state for session: {session_id}")
+    print(f"🔍 Loading state...", flush=True)
+    previous_state = state_persistence.load_state(session_id)
     
+    # 2. Merge with payload
+    merged_state = merge_states(previous_state, payload)
+    
+    # 3. Build initial state
     initial_state = {
         "correlation_id": correlation_id,
         "user_id": user_id,
@@ -112,11 +160,11 @@ def invoke(payload):
         "messages": conversation_history,
         "prompt": prompt,
         "intent": "",
-        "search_params": payload.get("search_params", {}),
-        "restaurant_results": payload.get("restaurant_results", []),
-        "selected_restaurant": {},
+        "search_params": merged_state["search_params"],
+        "restaurant_results": merged_state["restaurant_results"],
+        "selected_restaurant": merged_state["selected_restaurant"],
         "booking_intent": False,
-        "booking_details": payload.get("booking_details", previous_booking),
+        "booking_details": merged_state["booking_details"],
         "user_details": {},
         "token_amount": 0,
         "booking_result": {},
@@ -126,15 +174,21 @@ def invoke(payload):
         "memory_status": "enabled",
         "requires_hitl": False,
         "hitl_reason": "",
-        "validation_errors": []
+        "validation_errors": [],
+        "needs_more_info": False
     }
     
-    config = {"configurable": {"thread_id": f"thread_{random.randint(1000, 9999)}"}}
+    # No config needed - StatePersistence handles state management
     
     try:
-        final_state = langgraph_workflow.invoke(initial_state, config)
+        # 4. Execute workflow (stateless execution)
+        final_state = langgraph_workflow.invoke(initial_state)
         
-        # Return response with context for Streamlit
+        # 5. Save updated state
+        state_snapshot = extract_state_snapshot(final_state)
+        state_persistence.save_state(session_id, state_snapshot)
+        
+        # 6. Return structured response
         response = {
             "response": final_state.get("final_response", "No response generated."),
             "restaurant_results": final_state.get("restaurant_results", []),
@@ -142,13 +196,11 @@ def invoke(payload):
             "booking_details": final_state.get("booking_details", {})
         }
         
-        # For CLI compatibility, return just the response text
-        # AgentCore will serialize the full response
-        return final_state.get("final_response", "No response generated.")
+        return json.dumps(response)
     
     except Exception as e:
         logger.error(f"❌ Workflow error: {str(e)}")
-        return f"Error: {str(e)}"
+        return json.dumps({"response": f"Error: {str(e)}", "restaurant_results": [], "search_params": {}, "booking_details": {}})
 
 
 print("✅ Restaurant Booking System initialized (Modular Architecture)")

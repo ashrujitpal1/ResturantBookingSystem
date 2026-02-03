@@ -1,13 +1,20 @@
 """LLM-based helpers for intent classification and entity extraction."""
 import json
-import boto3
+import re
 from typing import Dict, Any, List
+from functools import lru_cache
+from aws_xray_sdk.core import xray_recorder
 from src.utils.logger import logger
+from src.utils.llm_providers import get_bedrock_provider
+from src.utils.circuit_breaker import load_prompt
+from src.utils.cost_tracker import track_cost
+from src.config.models import PROMPT_VERSION
 
 
-def classify_intent(user_message: str, conversation_history: List[Any], model_id: str = "amazon.nova-micro-v1:0") -> Dict[str, Any]:
+@xray_recorder.capture('classify_intent')
+def classify_intent(user_message: str, conversation_history: List[Any], model_id: str = "amazon.nova-micro-v1:0", correlation_id: str = "") -> Dict[str, Any]:
     """Use LLM to classify user intent from conversation context."""
-    bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+    provider = get_bedrock_provider()
     
     # Build conversation context
     history_text = ""
@@ -19,44 +26,42 @@ def classify_intent(user_message: str, conversation_history: List[Any], model_id
                 content = msg.get('content', '')
                 history_text += f"{role}: {content}\n"
     
-    prompt = f"""Analyze the user's intent based on the conversation history and current message.
+    # Load versioned prompt from S3
+    system_prompt = load_prompt("intent_classifier", PROMPT_VERSION)
+    
+    prompt = f"""{system_prompt}
 
 Conversation History:
 {history_text if history_text else "No previous conversation"}
 
 Current User Message: {user_message}
 
-Classify the intent as ONE of:
-- "search": User wants to search for restaurants
-- "booking": User wants to book a table (includes affirmative responses like "yes", "sure", "ok" after seeing restaurant results)
-- "history": User wants to see their booking history
-- "invalid": Invalid or malicious input
-
 Return ONLY a JSON object with this exact format:
 {{"intent": "search|booking|history|invalid", "confidence": 0.0-1.0, "reasoning": "brief explanation"}}"""
     
     try:
-        response = bedrock.converse(
-            modelId=model_id,
+        result = provider.invoke(
+            model_id=model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"temperature": 0.1, "maxTokens": 200}
+            inference_config={"temperature": 0.1, "maxTokens": 200},
+            request_id=f"{correlation_id}_intent_1" if correlation_id else None
         )
         
-        result_text = response['output']['message']['content'][0]['text'].strip()
-        result = json.loads(result_text)
+        # Track cost
+        track_cost(correlation_id, "system", 150, model_id)
         
-        logger.info(f"🤖 Intent Classification: {result}")
+        logger.info(f"[{correlation_id}] 🤖 Intent Classification: {result}")
         return result
     
     except Exception as e:
-        logger.error(f"❌ Intent classification failed: {e}")
-        # Fallback to search intent
+        logger.error(f"[{correlation_id}] ❌ Intent classification failed: {e}")
         return {"intent": "search", "confidence": 0.5, "reasoning": "fallback due to error"}
 
 
-def extract_booking_details(user_message: str, conversation_history: List[Any], model_id: str = "amazon.nova-lite-v1:0") -> Dict[str, Any]:
+@xray_recorder.capture('extract_booking_details')
+def extract_booking_details(user_message: str, conversation_history: List[Any], model_id: str = "amazon.nova-lite-v1:0", correlation_id: str = "") -> Dict[str, Any]:
     """Use LLM to extract booking details from conversation."""
-    bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+    provider = get_bedrock_provider()
     
     # Build conversation context
     history_text = ""
@@ -68,53 +73,121 @@ def extract_booking_details(user_message: str, conversation_history: List[Any], 
                 content = msg.get('content', '')
                 history_text += f"{role}: {content}\n"
     
-    prompt = f"""Extract booking details from the conversation.
+    # Load versioned prompt from S3
+    system_prompt = load_prompt("booking_agent", PROMPT_VERSION)
+    
+    prompt = f"""{system_prompt}
 
 Conversation History:
 {history_text if history_text else "No previous conversation"}
 
 Current User Message: {user_message}
 
-Extract the following information (use null if not found):
-- restaurant_name: Name of the restaurant
-- date: Booking date in YYYY-MM-DD format (convert "tomorrow", "today" to actual dates)
-- time: Booking time in HH:MM format (convert "lunch"->13:00, "dinner"->19:00)
-- no_of_guests: Number of guests (convert "me"->1, "alone"->1)
-- user_name: User's full name
-- user_email: User's email address
-- user_mobile: User's phone number
+Today's date: {__import__('datetime').datetime.now().strftime('%Y-%m-%d')}
 
-Today's date is: {__import__('datetime').datetime.now().strftime('%Y-%m-%d')}
-
-Return ONLY a JSON object:
-{{"restaurant_name": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "no_of_guests": 1, "user_name": "...", "user_email": "...", "user_mobile": "..."}}"""
+Extract booking details and return ONLY valid JSON."""
     
     try:
-        response = bedrock.converse(
-            modelId=model_id,
+        result = provider.invoke(
+            model_id=model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"temperature": 0.1, "maxTokens": 400}
+            inference_config={"temperature": 0.1, "maxTokens": 400},
+            request_id=f"{correlation_id}_extract_1" if correlation_id else None
         )
         
-        result_text = response['output']['message']['content'][0]['text'].strip()
-        result = json.loads(result_text)
+        logger.info(f"[{correlation_id}] 🤖 Raw extraction result: {result}")
         
-        # Remove null values
-        result = {k: v for k, v in result.items() if v is not None and v != "null"}
+        # Handle if result is not a dict
+        if not isinstance(result, dict):
+            logger.warning(f"[{correlation_id}] Result is not dict, attempting to parse: {type(result)}")
+            # If it's a string, try to parse as JSON
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    logger.error(f"[{correlation_id}] Failed to parse result as JSON: {result}")
+                    return {}
+            else:
+                return {}
         
-        logger.info(f"🤖 Extracted Booking Details: {result}")
+        # Remove null values and empty strings
+        result = {k: v for k, v in result.items() if v is not None and v != "null" and v != ""}
+        
+        # Track cost
+        track_cost(correlation_id, "system", 300, model_id)
+        
+        logger.info(f"[{correlation_id}] 🤖 Extracted Booking Details: {result}")
         return result
     
+    except json.JSONDecodeError as e:
+        logger.error(f"[{correlation_id}] ❌ JSON decode error: {e}")
+        return {}
     except Exception as e:
-        logger.error(f"❌ Booking extraction failed: {e}")
+        logger.error(f"[{correlation_id}] ❌ Booking extraction failed: {e}", exc_info=True)
         return {}
 
 
-def extract_search_params(user_message: str, model_id: str = "amazon.nova-micro-v1:0") -> Dict[str, str]:
-    """Use LLM to extract city and cuisine from search query."""
-    bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+@xray_recorder.capture('extract_restaurant_context')
+def extract_restaurant_context_from_history(conversation_history: List[Any], model_id: str = "amazon.nova-lite-v1:0", correlation_id: str = "") -> Dict[str, Any]:
+    """Use LLM to extract restaurant context from conversation history."""
+    provider = get_bedrock_provider()
     
-    prompt = f"""Extract restaurant search parameters from the user's message.
+    # Build conversation text
+    history_text = ""
+    for msg in conversation_history[-5:]:
+        if isinstance(msg, dict):
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            history_text += f"{role}: {content}\n\n"
+    
+    if not history_text:
+        return {"restaurant_results": [], "search_params": {}}
+    
+    # Load versioned prompt from S3
+    system_prompt = load_prompt("restaurant_finder", PROMPT_VERSION)
+    
+    prompt = f"""{system_prompt}
+
+Conversation:
+{history_text}
+
+Extract:
+1. List of restaurants mentioned (with name, rating, priceRange, address, city, restaurantId, cuisine)
+2. Search parameters (city, cuisine)
+
+Return ONLY a JSON object:
+{{"restaurant_results": [...], "search_params": {{"city": "...", "cuisine": "..."}}}}
+
+If no restaurants found, return: {{"restaurant_results": [], "search_params": {{}}}}"""
+    
+    try:
+        result = provider.invoke(
+            model_id=model_id,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inference_config={"temperature": 0.1, "maxTokens": 1000},
+            request_id=f"{correlation_id}_context_1" if correlation_id else None
+        )
+        
+        # Track cost
+        track_cost(correlation_id, "system", 800, model_id)
+        
+        logger.info(f"[{correlation_id}] 🤖 Extracted Context: {len(result.get('restaurant_results', []))} restaurants")
+        return result
+    
+    except Exception as e:
+        logger.error(f"[{correlation_id}] ❌ Context extraction failed: {e}")
+        return {"restaurant_results": [], "search_params": {}}
+
+
+@xray_recorder.capture('extract_search_params')
+def extract_search_params(user_message: str, model_id: str = "amazon.nova-micro-v1:0", correlation_id: str = "") -> Dict[str, str]:
+    """Extract search parameters from user message."""
+    provider = get_bedrock_provider()
+    
+    # Load versioned prompt from S3
+    system_prompt = load_prompt("restaurant_finder", PROMPT_VERSION)
+    
+    prompt = f"""{system_prompt}
 
 User Message: {user_message}
 
@@ -128,21 +201,37 @@ Return ONLY a JSON object:
 If not found, use empty string."""
     
     try:
-        response = bedrock.converse(
-            modelId=model_id,
+        result = provider.invoke(
+            model_id=model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"temperature": 0.1, "maxTokens": 100}
+            inference_config={"temperature": 0.1, "maxTokens": 100},
+            request_id=f"{correlation_id}_search_params_1" if correlation_id else None
         )
         
-        result_text = response['output']['message']['content'][0]['text'].strip()
-        # Remove markdown code blocks if present
-        if result_text.startswith('```'):
-            result_text = result_text.split('\n', 1)[1].rsplit('\n```', 1)[0]
-        result = json.loads(result_text)
+        # Handle if result is not a dict
+        if not isinstance(result, dict):
+            logger.warning(f"[{correlation_id}] Result is not dict, attempting to parse: {type(result)}")
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    logger.error(f"[{correlation_id}] Failed to parse search params as JSON: {result}")
+                    return {"city": "", "cuisine": ""}
+            else:
+                return {"city": "", "cuisine": ""}
         
-        logger.info(f"🤖 Extracted Search Params: {result}")
+        # Ensure keys exist
+        if "city" not in result:
+            result["city"] = ""
+        if "cuisine" not in result:
+            result["cuisine"] = ""
+        
+        # Track cost
+        track_cost(correlation_id, "system", 80, model_id)
+        
+        logger.info(f"[{correlation_id}] 🤖 Extracted Search Params: {result}")
         return result
     
     except Exception as e:
-        logger.error(f"❌ Search extraction failed: {e}")
+        logger.error(f"[{correlation_id}] ❌ Search extraction failed: {e}")
         return {"city": "", "cuisine": ""}

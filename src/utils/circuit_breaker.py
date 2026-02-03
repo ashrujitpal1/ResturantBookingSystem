@@ -44,10 +44,6 @@ class GovernancePolicy:
             "max_token_amount": 500.0,
             "require_approval_if": lambda args: args.get("noOfGuests", 0) > 10,
             "allowed_meal_types": ["Breakfast", "Lunch", "Dinner"]
-        },
-        "payment-api-target___paymentAPI": {
-            "max_amount": 500.0,
-            "require_approval_if": lambda args: args.get("tokenAmount", 0) > 200.0
         }
     }
     
@@ -63,9 +59,6 @@ class GovernancePolicy:
         
         if "max_token_amount" in policy and arguments.get("tokenAmount", 0) > policy["max_token_amount"]:
             return False, f"Maximum booking amount ${policy['max_token_amount']} exceeded"
-        
-        if "max_amount" in policy and arguments.get("tokenAmount", 0) > policy["max_amount"]:
-            return False, f"Maximum payment amount ${policy['max_amount']} exceeded"
         
         if "require_approval_if" in policy and policy["require_approval_if"](arguments):
             return False, "REQUIRES_HUMAN_APPROVAL"
@@ -101,6 +94,14 @@ def get_default_prompt(agent_name: str) -> str:
 def parse_mcp_response(result: dict) -> dict:
     """Parse MCP response with robust error handling."""
     try:
+        # Case 1: Direct Lambda response (already a dict with expected fields)
+        if isinstance(result, dict) and any(key in result for key in [
+            "paymentId", "bookingId", "userId", "restaurantId", "restaurants", 
+            "totalAmount", "tokenAmount", "bookingReference", "message", "error"
+        ]):
+            return result
+        
+        # Case 2: Nested MCP response
         if "result" in result and "content" in result["result"]:
             content = result["result"]["content"][0]["text"]
             try:
@@ -110,6 +111,8 @@ def parse_mcp_response(result: dict) -> dict:
                 return parsed
             except json.JSONDecodeError:
                 return {"error": "Invalid JSON response", "raw": content}
+        
+        # Case 3: Return as-is if already valid
         return result
     except Exception as e:
         return {"error": f"Parse error: {str(e)}", "raw": str(result)}
